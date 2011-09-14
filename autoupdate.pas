@@ -51,12 +51,13 @@ port=80
 interface
 
 uses
-  ShellApi,
   Forms,
   Dialogs;
 
 type
   TOnNewVersion = function: Boolean;
+
+  { TUpdateMethod }
 
   TUpdateMethod = class
   private
@@ -67,6 +68,9 @@ type
     procedure Uncompress(AZipFile: string);
     function GetFile(AFileName, ALocalFile: string): Boolean; virtual; abstract;
     procedure InstallNewVersion(AInstaller: string);
+    {$ifdef fpc}
+    procedure RunUpdateFpc(AUpdater: string);
+    {$endif}
     property UpdateFile: string read FUpdateFile write FUpdateFile;
   end;
 
@@ -108,9 +112,10 @@ uses
   Controls,
   SysUtils,
   IniFiles,
-  AbUnZper,
-  AbUtils,
-  AbArcTyp, Classes, StrUtils;
+  zipper,
+  Classes,
+  FileUtil,
+  StrUtils;
 
 { TAutoUpdate }
 
@@ -127,13 +132,13 @@ var
 begin
   inherited Create;
   lIniFile := TIniFile.Create(AIniFile);
-  lMethod := UpperCase(lIniFile.ReadString('default', 'method', 'ftp'));
+  lMethod := UpperCase(lIniFile.ReadString('autoupdate', 'method', 'ftp'));
 
-  lHost := lIniFile.ReadString('params', 'host', '');
-  lPort := lIniFile.ReadString('params', 'port', '');
-  lUser := lIniFile.ReadString('params', 'user', '');
-  lPass := lIniFile.ReadString('params', 'pass', '');
-  lDirectory := lIniFile.ReadString('params', 'directory', '');
+  lHost := lIniFile.ReadString('autoupdate', 'host', '');
+  lPort := lIniFile.ReadString('autoupdate', 'port', '');
+  lUser := lIniFile.ReadString('autoupdate', 'user', '');
+  lPass := lIniFile.ReadString('autoupdate', 'pass', '');
+  lDirectory := lIniFile.ReadString('autoupdate', 'directory', '');
 
   (* Depending on the method of storage FTP, HTTP or Shared folder
      the appropriate class is instantiated *)
@@ -143,7 +148,7 @@ begin
   if lMethod = 'HTTP' then
     FUpdateMethod := THttpUpdateMethod.Create(lHost, lPort);
 
-  FUpdateMethod.UpdateFile := lIniFile.ReadString('default', 'updatefile', '');
+  FUpdateMethod.UpdateFile := lIniFile.ReadString('autoupdate', 'updatefile', '');
 end;
 
 procedure TAutoUpdate.Execute;
@@ -155,7 +160,7 @@ begin
   if FUpdateMethod.CheckForNewVersion(lInstaller) then
   begin
     if Assigned(FOnNewVersion) then
-      lResult := FOnNewVersion
+      lResult := FOnNewVersion()
     else
       lResult := MessageDlg('There''s a new version. Do you want to update?.',
          mtConfirmation, [mbYes, mbNo], 0) = mrYes;
@@ -265,25 +270,43 @@ begin
     (* Execute updater.exe and terminate the application,
        updater.exe must copy all the files to the apropriate folder
        and re-execute the application. *)
-    lUpdater := lPath + '\updater.exe';
-    ShellExecute(0, nil, PChar(lUpdater), nil, nil, 1 {SW_SHOWNORMAL});
+    lUpdater := lPath + DirectorySeparator + 'updater';
+    {$ifndef fpc}
+    ShellExecute(0, nil, PChar(lUpdater + '.exe'), nil, nil, 1 {SW_SHOWNORMAL});
+    {$else}
+    RunUpdateFpc(lUpdater);
+    {$endif}
     Application.Terminate;
   end;
 end;
 
+{$ifdef fpc}
+procedure TUpdateMethod.RunUpdateFpc(AUpdater: string);
+begin
+
+end;
+{$endif}
+
 procedure TUpdateMethod.Uncompress(AZipFile: string);
 var
-  lUnzipper: TAbUnZipper;
+  Unzipper: TUnZipper;
+  lOutput: string;
 begin
-  lUnzipper := TAbUnZipper.Create(nil);
+  UnZipper := TUnZipper.Create;
   try
-    lUnzipper.FileName := AZipFile;
-    lUnzipper.BaseDirectory := GetCurrentDir;
-    lUnzipper.ExtractOptions := [eoCreateDirs, eoRestorePath];
-    lUnzipper.ExtractFiles('*.*');
+    (* Create output path *)
+    lOutput := ExtractFilePath(ParamStr(0)) + DirectorySeparator + 'tmp';
+    if DirectoryExists(lOutput) then
+      DeleteDirectory(lOutput, False)
+    else
+      CreateDir(lOutput);
+    UnZipper.FileName := AZipFile;
+    UnZipper.OutputPath := lOutput;
+    UnZipper.Examine;
+    UnZipper.UnZipAllFiles;
   finally
-    lUnzipper.Free;
-  end;
+    UnZipper.Free;
+  end
 end;
 
 { THttpUpdateMethod }
@@ -302,7 +325,7 @@ begin
   (* Gets a file from the HTTP server *)
   lStream := TMemoryStream.Create;
   try
-    lUrl := 'http://' + FHost + ':' + FPort + '/' + AFileName;
+    lUrl := 'http://' + FHost + ':' + FPort + AFileName;
     Result := HttpGetBinary(lUrl, lStream);
     if Result then
     begin
@@ -316,4 +339,4 @@ end;
 
 end.
 
-
+
